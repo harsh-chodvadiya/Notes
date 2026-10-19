@@ -19,6 +19,7 @@ ios/
 *.key
 *.mobileprovision
 *.pem
+keystore.properties
 
 # Environment
 .env
