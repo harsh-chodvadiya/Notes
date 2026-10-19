@@ -43,6 +43,9 @@ Thumbs.db
 .idea/
 .vscode/
 
+# Tests (kept locally only)
+__tests__/
+
 # Misc
 Notes-Expo/
 Notes-Flutter/

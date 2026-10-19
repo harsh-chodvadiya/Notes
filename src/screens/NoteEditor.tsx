@@ -13,7 +13,6 @@ import {
   BulletsIcon,
   ChecklistIcon,
   CloseIcon,
-  DashedListIcon,
   FontColourIcon,
   IndentIcon,
   ItalicIcon,
@@ -97,8 +96,19 @@ const HIGHLIGHTS: { name: string; key: string; light: string; dark: string; reti
 const tint = (hex: string, alpha: number) =>
   `rgba(${parseInt(hex.slice(1, 3), 16)},${parseInt(hex.slice(3, 5), 16)},${parseInt(hex.slice(5, 7), 16)},${alpha})`;
 
+/**
+ * Phones have no arrows in their main font and borrow them from a symbol font,
+ * where they sit low, small and thin beside the text. This tiny font carries
+ * just ← → ↔ ⇒ ⇔, drawn for the app with medium-weight rounded strokes at the height of
+ * a dash, so arrows look the same on every device.
+ */
+const ARROW_FONT_CSS =
+  `@font-face{font-family:NotexArrows;unicode-range:U+2190,U+2192,U+2194,U+21D2,U+21D4;` +
+  `src:url(data:font/woff2;base64,d09GMgABAAAAAAKgAAoAAAAAB8gAAAJVAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAABmAAVAqKBIgoATYCJAMQCw4ABCAFbwdWGyoGAAae/7er7qv6bYRdA66AwgJQPMj7TLRK4ZMPIs5zP9OlNdDecDjA8cSGA/2LpDVVUUZoYQbIvUM7Pzs825Yc1LJHJE7UrMf2GfsJ0N3H5QIuFITMAR58EYwLxlfPmrYgjNrSaM/WgNeBJFcaVjHkd4J40VDGBeOSccX4bHxtbweN8vum7+s5dd2+d0WA6wYveGcv30GLwhAKvvAH2rSJu2cudc8/dQ2Ig9c7Mglb5Xb66tWrqaWnEdhXC+/ANOfAlSvJg0AmS65QRBhtxtl9FYgDV+T+uKWie8jSy0QAHZSmrwmBDnIy7rzli4bNESbN3fmUKLp69tjpkAvEwpxqiZlD9DhLTTj27pYrvJMwix4izg7+OLLDtGKOXdfbV/8vX3V2Xudo53lnq/L/6g+8rqkxdeyYzb+wxo4VGdET6VksUuJG3B5v53mjkJEjGDvWyv9riDVE2smsqWXx728bguO8b2pqATcAOsyzJYF9BG/aM++sWYDVw7DaGsZfvpVcCf/mMe0vdf8PjXKDr2XjRvHbt+qtzXfvaGuL133jphY69YdzZs+Zw8jpbZN1rCfiGruabTzW7cPTOUww+2MCAHjSv/Xm7rPc/MiAJq/uBeB/89o78usdnHJfUKcAHc2T/lRjey1AOyQIYIgVoHN7AdzsjkKXSCFW9EIAIEG6NdujAekByoeQJXGZNMJUfhmq2pEbuukFRv+n3CcmsZ4tLGUHOYYywJuM29nMND3hcrayhoUNaLCvuUE00UWJS9yeretWduvat5sM7wLrgRzRjdMDAAAA) format('woff2')}`;
+
 /** CSS inside the editor WebView: sizes, paragraph styles, highlights, section links and dashed lists. */
 const editorCSS = (t: Theme) =>
+  ARROW_FONT_CSS +
   SIZE_CSS +
   `h1{font-size:28px;font-weight:700;line-height:1.25;margin:10px 0 4px}` +
   `h2{font-size:22px;font-weight:700;line-height:1.3;margin:8px 0 2px}` +
@@ -114,7 +124,12 @@ const editorCSS = (t: Theme) =>
     );
   }).join('') +
   `a{color:${COMPOSE};text-decoration:underline}` +
-  `ul.dashed{list-style:none;padding-left:22px}ul.dashed>li::before{content:"–";display:inline-block;width:22px;margin-left:-22px}`;
+  // Lists sit flush with the text around them (no browser 1em gap above/below) and indent 24px a level, not 40px.
+  `ul,ol{margin:0}ul,ol:not(.x-todo){padding-left:24px}li{margin:0}` +
+  // Dashed lists can no longer be made, but older notes may still have them.
+  `ul.dashed,ul.dashed ul{list-style:none;padding-left:22px}` +
+  `ul.dashed li::before{content:"–";display:inline-block;width:22px;margin-left:-22px}` +
+  `ul.dashed ol li::before{content:none}`;
 
 /**
  * Section links (iOS 27): gives every heading an id, remembers the selection,
@@ -190,25 +205,42 @@ const RESTORE_SELECTION_JS = `
   content.dispatchEvent(new Event('input'));
 `;
 
+/**
+ * Typing arrows: `->` becomes →, `<-` ←, `=>` ⇒, `<=>` ⇔ and `<->` ↔ (which
+ * arrives as ← followed by `>`). Runs after each typed character,
+ * and once a phone keyboard finishes composing a word, since changing the text
+ * mid-composition confuses Android keyboards. The swap goes through insertText
+ * so the browser's undo still works and the library sees the change.
+ */
+const ARROWS_JS = `
+  if (window.__arrows) return; window.__arrows = true;
+  var content = $.querySelector('.pell-content');
+  var rules = [['<->', '\\u2194'], ['\\u2190>', '\\u2194'], ['<=>', '\\u21D4'], ['->', '\\u2192'], ['<-', '\\u2190'], ['=>', '\\u21D2']];
+  function convert() {
+    var sel = $.getSelection();
+    if (!sel.rangeCount || !sel.isCollapsed) return;
+    var node = sel.anchorNode, at = sel.anchorOffset;
+    if (!node || node.nodeType !== 3 || !content.contains(node) || node.parentNode.closest('pre, code')) return;
+    var before = node.data.slice(0, at);
+    for (var i = 0; i < rules.length; i++) {
+      var from = rules[i][0];
+      if (before.slice(-from.length) !== from) continue;
+      var r = $.createRange(); r.setStart(node, at - from.length); r.setEnd(node, at);
+      sel.removeAllRanges(); sel.addRange(r);
+      $.execCommand('insertText', false, rules[i][1]);
+      return;
+    }
+  }
+  content.addEventListener('input', function (e) {
+    if (e.isComposing || !e.inputType || e.inputType.indexOf('insert') !== 0) return;
+    convert();
+  });
+  content.addEventListener('compositionend', function () { setTimeout(convert, 0); });
+`;
+
 const scrollToJS = (id: string) => `
   var e = $.getElementById(${JSON.stringify(id)});
   if (e) e.scrollIntoView({ behavior: 'smooth', block: 'start' });
-`;
-
-/**
- * Turns the current list into a dashed one (or back), via script in the editor.
- * The `input` event makes the editor save the class change.
- */
-const DASHED_LIST_JS = `
-  var sel = $.getSelection(); if (!sel.rangeCount) return;
-  var at = function () { var n = $.getSelection().anchorNode; return n && (n.nodeType === 1 ? n : n.parentNode); };
-  var ul = at() && at().closest('ul');
-  if (ul && ul.classList.contains('dashed')) { $.execCommand('insertUnorderedList'); }
-  else {
-    if (!ul || ul.classList.contains('x-todo')) { $.execCommand('insertUnorderedList'); ul = at() && at().closest('ul'); }
-    if (ul) ul.classList.add('dashed');
-  }
-  $.querySelector('.pell-content').dispatchEvent(new Event('input'));
 `;
 
 /**
@@ -428,7 +460,7 @@ export default function NoteEditor({ note, folderId, onClose }: Props) {
     </TipPressable>
   );
 
-  /** A button inside a Text options group; the active one sits on a 30dp circle. */
+  /** A button inside a Text options group; the active one sits on a rounded grey chip. */
   const option = (label: string, Glyph: BarIcon, action: string, toggles = true) => {
     const on = toggles && isOn(action);
     return (
@@ -440,7 +472,7 @@ export default function NoteEditor({ note, folderId, onClose }: Props) {
         onPress={() => run(action)}
         style={styles.option}
       >
-        <View style={[styles.optionDot, on && { backgroundColor: t.toolOn }]}>
+        <View style={[styles.optionChip, on && { backgroundColor: t.toolOn }]}>
           <Glyph color={t.tool} size={22} />
         </View>
       </Pressable>
@@ -498,11 +530,12 @@ export default function NoteEditor({ note, folderId, onClose }: Props) {
             color: t.text,
             placeholderColor: t.subtext,
             caretColor: t.text,
-            contentCSSText: `font-family: sans-serif; font-size: ${DEFAULT_SIZE}px; line-height: 1.45; padding: 4px 24px 24px;`,
+            contentCSSText: `font-family: NotexArrows, sans-serif; font-size: ${DEFAULT_SIZE}px; line-height: 1.45; padding: 4px 24px 24px;`,
             cssText: editorCSS(t),
           }}
           editorInitializedCallback={() => {
             editor.current?.command(TRACK_SELECTION_JS);
+            editor.current?.command(ARROWS_JS);
             // Only while nothing's been saved since opening, or it would mask a real edit.
             editor.current?.getContentHtml().then((html) => {
               if (saved.current.bodies.has(note?.body ?? '')) saved.current.bodies.add(html);
@@ -532,29 +565,24 @@ export default function NoteEditor({ note, folderId, onClose }: Props) {
                 </Pressable>
               </View>
               <View style={styles.groupRow}>
-                <View style={[styles.group, { width: 126, backgroundColor: t.toolGroup }]}>
+                <View style={[styles.group, { flex: 2, backgroundColor: t.toolGroup }]}>
                   {option('Bullet points', BulletsIcon, actions.insertBulletsList)}
-                  <Pressable accessibilityLabel="Dashed list" onPress={() => script(DASHED_LIST_JS)} style={styles.option}>
-                    <View style={styles.optionDot}>
-                      <DashedListIcon color={t.tool} size={22} />
-                    </View>
-                  </Pressable>
                   {option('Numbered list', NumberedIcon, actions.insertOrderedList)}
                 </View>
-                <View style={[styles.group, { width: 126, backgroundColor: t.toolGroup }]}>
+                <View style={[styles.group, { flex: 3, backgroundColor: t.toolGroup }]}>
                   {option('Align text to left', AlignLeftIcon, actions.alignLeft)}
                   {option('Align text to centre', AlignCenterIcon, actions.alignCenter)}
                   {option('Align text to right', AlignRightIcon, actions.alignRight)}
                 </View>
               </View>
               <View style={styles.groupRow}>
-                <View style={[styles.group, { width: 160, backgroundColor: t.toolGroup }]}>
+                <View style={[styles.group, { flex: 4, backgroundColor: t.toolGroup }]}>
                   {option('Bold', BoldIcon, actions.setBold)}
                   {option('Italic', ItalicIcon, actions.setItalic)}
                   {option('Underline', UnderlineIcon, actions.setUnderline)}
                   {option('Strikethrough', StrikethroughIcon, actions.setStrikethrough)}
                 </View>
-                <View style={[styles.group, { width: 92, backgroundColor: t.toolGroup }]}>
+                <View style={[styles.group, { flex: 2, backgroundColor: t.toolGroup }]}>
                   {option('Indent', IndentIcon, actions.indent, false)}
                   {option('Outdent', OutdentIcon, actions.outdent, false)}
                 </View>
@@ -807,10 +835,11 @@ const styles = StyleSheet.create({
   textCard: { left: 56, bottom: 8, width: 300, padding: 20, paddingTop: 0, gap: 10 },
   cardHead: { height: 60, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: -10 },
   cardTitle: { fontFamily: FONT, fontSize: 17, fontWeight: 'bold' },
-  groupRow: { flexDirection: 'row', justifyContent: 'space-between' },
+  // Groups share each row by button count, so every button gets the same width.
+  groupRow: { flexDirection: 'row', gap: 12 },
   group: { height: 40, borderRadius: 12, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 2 },
   option: { flex: 1, height: 40, alignItems: 'center', justifyContent: 'center' },
-  optionDot: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  optionChip: { width: 36, height: 30, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   sizeCard: { left: 3 + SLOT * 4 + 4, bottom: 0, width: 100, maxHeight: 230, overflow: 'hidden' },
   styleCard: { left: 3 + SLOT * 2 - 16, bottom: 8, width: 200, paddingVertical: 6, overflow: 'hidden' },
   menuItem: { minHeight: SIZE_ITEM, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20 },

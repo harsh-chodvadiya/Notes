@@ -245,7 +245,6 @@ export function FontColourIcon({ color, swatch, size = 24 }: IconProps & { swatc
   );
 }
 
-export const DashedListIcon = (p: IconProps) => <Stroke {...p} d="M28 13.5H52M28 30H52M28 46.5H52M11 13.5H18M11 30H18M11 46.5H18" />;
 
 /** Search: magnifier in the toolbar's stroke weight. */
 export function SearchIcon({ color, size = 24 }: IconProps) {
